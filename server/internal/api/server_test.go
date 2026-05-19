@@ -162,6 +162,33 @@ func TestMCPInitializeAndToolsList(t *testing.T) {
 	assert.Contains(t, rec3.Body.String(), `"acme/hello"`)
 }
 
+func TestNoAuthDevModeServesRequests(t *testing.T) {
+	// When the server is started without an auth Service (no DB),
+	// /v1 endpoints must still work — the route group injects an
+	// anonymous principal so handlers don't return 401.
+	s := newTestServer(t)
+
+	manifest := models.SkillManifest{
+		Namespace: "acme",
+		Name:      "hello",
+		Version:   "0.1.0",
+		Runtime:   models.Runtime{Type: models.RuntimeDocker, Image: "python:3.12-slim"},
+	}
+	body, _ := json.Marshal(manifest)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/skills", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No principal injected — middleware should fall back to anonymous.
+	s.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/v1/skills/acme/hello", nil)
+	s.Handler().ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code)
+}
+
 func TestTenantIsolation(t *testing.T) {
 	// Skills registered by org A must not be visible to org B.
 	s := newTestServer(t)

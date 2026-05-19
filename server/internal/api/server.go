@@ -3,11 +3,18 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/mcp"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
 )
+
+// devOrgID is the well-known org used when the server runs without a real
+// auth service (SKILLCLOUD_DB_DSN unset). All requests are scoped to this
+// org so the in-memory registry behaves like a single-tenant local sandbox.
+// Production deployments MUST set a DSN and run the real auth middleware.
+var devOrgID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
 
 // Config holds runtime configuration for the API server.
 type Config struct {
@@ -76,10 +83,10 @@ func (s *Server) routes() {
 		}
 	}
 
+	authMW := s.principalMiddleware()
+
 	v1 := s.engine.Group("/v1")
-	if s.auth != nil {
-		v1.Use(auth.Middleware(s.auth))
-	}
+	v1.Use(authMW)
 	{
 		v1.GET("/skills", s.listSkills)
 		v1.GET("/skills/:namespace/:name", s.getSkill)
@@ -89,10 +96,31 @@ func (s *Server) routes() {
 
 	// MCP endpoint exposes registered skills as MCP tools so any
 	// MCP-capable client can use them with zero modification. It accepts
-	// the same Bearer token as /v1.
+	// the same Bearer token as /v1 (or, in no-DB dev mode, falls back to
+	// the same anonymous principal).
 	mcpGroup := s.engine.Group("/mcp")
-	if s.auth != nil {
-		mcpGroup.Use(auth.Middleware(s.auth))
-	}
+	mcpGroup.Use(authMW)
 	mcpGroup.POST("", mcp.Handler(s.registry))
+}
+
+// principalMiddleware returns the middleware that injects a Principal into
+// every authenticated request. When a real auth service is configured it
+// delegates to the Bearer-token middleware; otherwise it injects a
+// well-known anonymous principal so the in-memory dev mode is usable
+// without authentication.
+func (s *Server) principalMiddleware() gin.HandlerFunc {
+	if s.auth != nil {
+		return auth.Middleware(s.auth)
+	}
+	anonymous := auth.Principal{OrgID: devOrgID}
+	return func(c *gin.Context) {
+		// Honour a principal that's already been injected (unit tests
+		// pre-populate one via auth.InjectPrincipal); otherwise fall
+		// back to the anonymous dev principal.
+		if _, ok := auth.PrincipalFromContext(c.Request.Context()); !ok {
+			ctx := auth.InjectPrincipal(c.Request.Context(), anonymous)
+			c.Request = c.Request.WithContext(ctx)
+		}
+		c.Next()
+	}
 }

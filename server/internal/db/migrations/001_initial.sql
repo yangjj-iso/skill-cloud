@@ -37,7 +37,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS api_keys_prefix_idx ON api_keys (prefix);
+-- Authentication looks up the API key row by `prefix` alone. The uniqueness
+-- constraint guarantees `QueryRow` returns the exact key being presented; a
+-- silent prefix collision would otherwise compare bcrypt against the wrong
+-- secret and lock the user out with no diagnostic. `IssueAPIKey` will then
+-- surface a unique-violation error and re-generate, instead of silently
+-- breaking authentication.
+CREATE UNIQUE INDEX IF NOT EXISTS api_keys_prefix_idx ON api_keys (prefix);
 
 -- Skills are uniquely identified by (org_id, namespace, name) so each org can
 -- own its own namespaces without colliding with other tenants.
