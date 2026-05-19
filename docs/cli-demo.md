@@ -59,27 +59,27 @@ The platform doesn't ship a sign-up UI yet — operators use the
 bootstrap endpoints directly. (M4 will add a Web UI.)
 
 ```bash
-# Create an org.
+# Create an org. Both slug (URL-safe) and human name are required.
 ORG_ID=$(curl -s -X POST http://localhost:8080/v1/auth/orgs \
   -H 'Content-Type: application/json' \
-  -d '{"name":"acme"}' | jq -r .id)
+  -d '{"slug":"acme","name":"Acme"}' | jq -r .id)
 
 # Create a user in that org.
 USER_ID=$(curl -s -X POST http://localhost:8080/v1/auth/users \
   -H 'Content-Type: application/json' \
   -d "{\"org_id\":\"$ORG_ID\",\"email\":\"dev@acme.example\"}" | jq -r .id)
 
-# Mint an API key. The plaintext value is only shown once; save it.
-API_KEY=$(curl -s -X POST http://localhost:8080/v1/auth/api_keys \
+# Mint an API key. The plaintext `token` value is only shown once; save it.
+TOKEN=$(curl -s -X POST http://localhost:8080/v1/auth/api_keys \
   -H 'Content-Type: application/json' \
-  -d "{\"org_id\":\"$ORG_ID\",\"user_id\":\"$USER_ID\",\"name\":\"laptop\"}" | jq -r .api_key)
-echo "API_KEY=$API_KEY"
+  -d "{\"org_id\":\"$ORG_ID\",\"user_id\":\"$USER_ID\",\"name\":\"laptop\"}" | jq -r .token)
+echo "TOKEN=$TOKEN"
 ```
 
 ## 4. `skill login`
 
 ```bash
-skill login --host http://localhost:8080 --api-key "$API_KEY"
+skill login --host http://localhost:8080 --api-key "$TOKEN"
 # server health check passes, then:
 # saved credentials to /home/<you>/.skillcloud/config.yaml
 ```
