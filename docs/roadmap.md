@@ -22,6 +22,26 @@
 - [x] `POST /v1/auth/orgs`, `POST /v1/auth/users`, `POST /v1/auth/api_keys` bootstrap endpoints
 - [x] CI runs Go unit + Postgres integration tests
 
+### M1.5 — Invocation auditing + anti-theft
+
+- [x] `002_invocations_logging.sql` adds `caller_ip`, `user_agent`,
+      `input_bytes`, `output_bytes`, `api_key_id` columns and a
+      `(org_id, skill_id, started_at DESC)` index
+- [x] Every `/v1/.../invoke` and MCP `tools/call` writes an invocation
+      row (org_id, user_id, api_key_id, skill, version, status,
+      latency, payload sizes, caller IP, user-agent)
+- [x] `GET /v1/skills/:ns/:name/stats` returns total / 24h call counts,
+      `last_invoked_at`, `last_caller_ip` (org-scoped)
+- [x] Caller-IP middleware honours `X-Forwarded-For` /
+      `X-Real-IP` only when `SKILLCLOUD_TRUST_PROXY=true`
+- [x] Per-API-key sliding-window rate limit (default 60 req/min) with
+      `X-RateLimit-Limit` / `X-RateLimit-Remaining` /
+      `X-RateLimit-Reset` / `Retry-After` headers and 429 response
+- [x] Manifest projection: `/v1/skills` list/get and MCP `tools/list`
+      strip `runtime.image` / `entrypoint` / `url`; runtime details are
+      only available to the owning org via
+      `GET /v1/skills/:ns/:name/runtime`
+
 ### M2 — Real runtime dispatch
 
 - [ ] `runtime/docker_runner.go` — one-shot container w/ resource limits, stdin/stdout JSON contract

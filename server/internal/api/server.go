@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
+	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/mcp"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
 )
@@ -23,20 +24,30 @@ type Config struct {
 
 // Server is the HTTP API server.
 type Server struct {
-	cfg      Config
-	engine   *gin.Engine
-	registry registry.Registry
-	auth     *auth.Service
+	cfg         Config
+	engine      *gin.Engine
+	registry    registry.Registry
+	auth        *auth.Service
+	invocations invocations.Store
+	rateLimit   RateLimitConfig
+	trustProxy  bool
 }
 
-// Options configures non-default server dependencies. Both fields are
+// Options configures non-default server dependencies. All fields are
 // optional: if Registry is nil the server falls back to an in-memory
 // registry (used by unit tests and ephemeral dev mode); if Auth is nil
 // the server runs without bearer-token enforcement and unit tests must
-// inject a principal directly via `auth.InjectPrincipal`.
+// inject a principal directly via `auth.InjectPrincipal`; if Invocations
+// is nil an in-memory store is used.
 type Options struct {
-	Registry registry.Registry
-	Auth     *auth.Service
+	Registry    registry.Registry
+	Auth        *auth.Service
+	Invocations invocations.Store
+	RateLimit   RateLimitConfig
+	// TrustProxy controls whether X-Forwarded-For / X-Real-IP are honoured
+	// when resolving the caller IP. Enable only when the server sits
+	// behind a trusted load balancer.
+	TrustProxy bool
 }
 
 // NewServer constructs a Server with the given configuration. See Options
@@ -50,8 +61,24 @@ func NewServer(cfg Config, opts Options) *Server {
 	if reg == nil {
 		reg = registry.NewInMemory()
 	}
+	inv := opts.Invocations
+	if inv == nil {
+		inv = invocations.NewMemory()
+	}
+	rl := opts.RateLimit
+	if rl.RequestsPerMinute == 0 {
+		rl = DefaultRateLimit
+	}
 
-	s := &Server{cfg: cfg, engine: engine, registry: reg, auth: opts.Auth}
+	s := &Server{
+		cfg:         cfg,
+		engine:      engine,
+		registry:    reg,
+		auth:        opts.Auth,
+		invocations: inv,
+		rateLimit:   rl,
+		trustProxy:  opts.TrustProxy,
+	}
 	s.routes()
 	return s
 }
@@ -67,6 +94,8 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) routes() {
+	s.engine.Use(clientIPMiddleware(s.trustProxy))
+
 	s.engine.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
@@ -84,12 +113,15 @@ func (s *Server) routes() {
 	}
 
 	authMW := s.principalMiddleware()
+	rlMW := rateLimitMiddleware(s.rateLimit)
 
 	v1 := s.engine.Group("/v1")
-	v1.Use(authMW)
+	v1.Use(authMW, rlMW)
 	{
 		v1.GET("/skills", s.listSkills)
 		v1.GET("/skills/:namespace/:name", s.getSkill)
+		v1.GET("/skills/:namespace/:name/runtime", s.getSkillRuntime)
+		v1.GET("/skills/:namespace/:name/stats", s.getSkillStats)
 		v1.POST("/skills", s.createSkill)
 		v1.POST("/skills/:namespace/:name/invoke", s.invokeSkill)
 	}
@@ -97,10 +129,14 @@ func (s *Server) routes() {
 	// MCP endpoint exposes registered skills as MCP tools so any
 	// MCP-capable client can use them with zero modification. It accepts
 	// the same Bearer token as /v1 (or, in no-DB dev mode, falls back to
-	// the same anonymous principal).
+	// the same anonymous principal). Runtime details are stripped from
+	// tools/list responses (see internal/mcp/server.go).
 	mcpGroup := s.engine.Group("/mcp")
-	mcpGroup.Use(authMW)
-	mcpGroup.POST("", mcp.Handler(s.registry))
+	mcpGroup.Use(authMW, rlMW)
+	mcpGroup.POST("", mcp.Handler(s.registry, mcp.Options{
+		Invocations: s.invocations,
+		CallerIP:    callerIPFromContext,
+	}))
 }
 
 // principalMiddleware returns the middleware that injects a Principal into

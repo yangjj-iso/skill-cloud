@@ -60,8 +60,8 @@ identical.
 
 ## Schema
 
-Implemented in `server/internal/db/migrations/001_initial.sql`. Tables
-are applied on every startup via an embedded migration runner
+Implemented in `server/internal/db/migrations/*.sql`. Tables are applied
+on every startup via an embedded migration runner
 (`server/internal/db/db.go`).
 
 ```
@@ -69,12 +69,15 @@ orgs           (id, slug, name, created_at)
 users          (id, email, created_at)
 org_members    (org_id, user_id, role)
 api_keys       (id, org_id, user_id, prefix, hash, name, last_used_at, created_at)
+                                                UNIQUE (prefix)  -- prevents silent collisions
 skills         (id, org_id, namespace, name, description, latest_version,
                 created_at, updated_at)         UNIQUE (org_id, namespace, name)
 skill_versions (id, skill_id, version, manifest, storage_key, created_at)
                                                 UNIQUE (skill_id, version)
-invocations    (id, org_id, user_id, skill_id, version, status,
-                input, output, error_message, started_at, finished_at, latency_ms)
+invocations    (id, org_id, user_id, api_key_id, skill_id, version, status,
+                input, output, error_message,
+                caller_ip, user_agent, input_bytes, output_bytes,
+                started_at, finished_at, latency_ms)
 ```
 
 ## Authentication
@@ -90,6 +93,40 @@ invocations    (id, org_id, user_id, skill_id, version, status,
   `Principal{OrgID, UserID, APIKeyID}` into the request context.
 - Handlers read the principal from context and pass `OrgID` to the
   registry so every read/write is row-level scoped to the caller's org.
+
+## Anti-theft / abuse defences
+
+- **Manifest projection.** `/v1/skills` (list + get) and the MCP
+  `tools/list` response only return `name`, `description`, `inputSchema`,
+  and the runtime *type* (so callers know whether they're hitting a
+  container or an HTTP proxy). The fields that would let a third party
+  reproduce the skill — `runtime.image`, `runtime.entrypoint`,
+  `runtime.url`, `runtime.env`, `runtime.cmd` — are stripped.
+- **Dedicated runtime endpoint.** Owners (i.e. callers whose principal
+  matches the skill's `org_id`) read implementation details from
+  `GET /v1/skills/:ns/:name/runtime`. The registry is already org-scoped,
+  so a successful lookup here doubles as the authorization check.
+- **Per-key rate limit.** Default 60 req/min/api_key, configurable via
+  `SKILLCLOUD_RATE_LIMIT`. Excess requests return `429` plus
+  `Retry-After` and `X-RateLimit-{Limit,Remaining,Reset}` headers. The
+  current implementation is an in-process sliding window — acceptable
+  for single-replica deployments and trivially swappable for Redis when
+  we go multi-replica.
+- **Caller-IP capture.** A startup-time switch (`SKILLCLOUD_TRUST_PROXY`)
+  controls whether `X-Forwarded-For` / `X-Real-IP` are honoured.
+  Direct-exposure deployments leave it off so spoofed headers can't
+  rewrite the audit trail; only deployments behind a trusted load
+  balancer turn it on.
+- **Per-invocation audit row.** Every REST `/invoke` and MCP
+  `tools/call` writes one row to `invocations` with `org_id`, `user_id`,
+  `api_key_id`, `skill_id`, `version`, `status`, `latency_ms`,
+  `input_bytes`, `output_bytes`, `caller_ip`, and `user_agent`. The
+  `(org_id, skill_id, started_at DESC)` index keeps per-skill stat
+  queries cheap.
+- **Stats endpoint.** `GET /v1/skills/:ns/:name/stats` exposes total
+  call count, 24h call count, last invocation time, and last caller IP
+  to the owning org so abuse patterns can be spotted by hand and / or
+  surfaced in a future dashboard.
 
 ## Sandbox security (MVP)
 

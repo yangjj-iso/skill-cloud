@@ -1,11 +1,17 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
+	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
 )
 
@@ -20,7 +26,11 @@ func (s *Server) listSkills(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"skills": skills})
+	redacted := make([]models.SkillManifest, len(skills))
+	for i, sk := range skills {
+		redacted[i] = sk.Redacted()
+	}
+	c.JSON(http.StatusOK, gin.H{"skills": redacted})
 }
 
 func (s *Server) getSkill(c *gin.Context) {
@@ -40,7 +50,32 @@ func (s *Server) getSkill(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
 	}
-	c.JSON(http.StatusOK, skill)
+	c.JSON(http.StatusOK, skill.Redacted())
+}
+
+// getSkillRuntime returns the runtime implementation details for an
+// owned skill. The registry is already org-scoped, so a successful Get
+// here proves the caller is in the owning org. This is the ONE endpoint
+// that exposes runtime.image / entrypoint / url — deliberately separate
+// so that anti-theft redaction on list/get can't be bypassed by accident.
+func (s *Server) getSkillRuntime(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+	skill, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+	c.JSON(http.StatusOK, skill.Runtime)
 }
 
 func (s *Server) createSkill(c *gin.Context) {
@@ -74,6 +109,8 @@ func (s *Server) invokeSkill(c *gin.Context) {
 	}
 	ns := c.Param("namespace")
 	name := c.Param("name")
+	started := time.Now().UTC()
+
 	skill, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -84,20 +121,80 @@ func (s *Server) invokeSkill(c *gin.Context) {
 		return
 	}
 
+	rawBody, _ := io.ReadAll(c.Request.Body)
 	var input map[string]any
-	if err := c.ShouldBindJSON(&input); err != nil {
-		// Empty body is allowed.
+	if len(rawBody) > 0 {
+		if err := json.Unmarshal(rawBody, &input); err != nil {
+			input = map[string]any{}
+		}
+	} else {
 		input = map[string]any{}
 	}
 
 	// Real runtime dispatch is not yet implemented — return a stub
 	// response so the SDK / MCP integration can be developed in parallel.
-	c.JSON(http.StatusOK, gin.H{
+	output := gin.H{
 		"skill":  skill.QualifiedName(),
 		"input":  input,
 		"output": gin.H{"message": "stub invocation — runtime dispatch not yet implemented"},
 		"status": "ok",
-	})
+	}
+	var buf bytes.Buffer
+	_ = json.NewEncoder(&buf).Encode(output)
+
+	s.recordInvocation(c, p, skill, started, "ok", "", len(rawBody), buf.Len())
+
+	c.JSON(http.StatusOK, output)
+}
+
+func (s *Server) getSkillStats(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+	_, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+	stats, err := s.invocations.Stats(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+// recordInvocation writes an invocation row. Failures are logged but do
+// not fail the request — losing audit fidelity is preferable to failing
+// the user-facing call.
+func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models.SkillManifest, started time.Time, status, errMsg string, inputBytes, outputBytes int) {
+	entry := invocations.Entry{
+		OrgID:        p.OrgID,
+		UserID:       p.UserID,
+		APIKeyID:     p.APIKeyID,
+		Namespace:    skill.Namespace,
+		Name:         skill.Name,
+		Version:      skill.Version,
+		Status:       status,
+		LatencyMS:    int(time.Since(started).Milliseconds()),
+		InputBytes:   inputBytes,
+		OutputBytes:  outputBytes,
+		ErrorMessage: errMsg,
+		CallerIP:     callerIPFromContext(c),
+		UserAgent:    c.Request.UserAgent(),
+		StartedAt:    started,
+	}
+	if err := s.invocations.Log(c.Request.Context(), entry); err != nil {
+		log.Printf("invocations: log %s/%s: %v", skill.Namespace, skill.Name, err)
+	}
 }
 
 // --- bootstrap auth handlers ---

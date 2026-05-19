@@ -54,6 +54,26 @@ func (m SkillManifest) QualifiedName() string {
 	return fmt.Sprintf("%s/%s", m.Namespace, m.Name)
 }
 
+// Redacted returns the manifest with runtime implementation details
+// stripped: image / entrypoint / url are blanked while the runtime
+// `type` and resource limits are kept (callers still need to know
+// whether a skill is docker-backed or proxied, and how slow / hungry it
+// may be). This is the projection returned from public-facing list/get
+// endpoints and the MCP tools/list response so anyone discovering a
+// skill cannot trivially copy the underlying implementation.
+//
+// Owners fetch the full manifest (including runtime internals) via the
+// dedicated /v1/skills/:namespace/:name/runtime endpoint.
+func (m SkillManifest) Redacted() SkillManifest {
+	r := m
+	r.Runtime = Runtime{
+		Type:           m.Runtime.Type,
+		TimeoutSeconds: m.Runtime.TimeoutSeconds,
+		MemoryMB:       m.Runtime.MemoryMB,
+	}
+	return r
+}
+
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 
