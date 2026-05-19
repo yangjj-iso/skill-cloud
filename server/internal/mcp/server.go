@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
 )
@@ -39,7 +40,10 @@ type jsonRPCError struct {
 }
 
 // Handler returns a gin handler that implements the MCP JSON-RPC contract.
-func Handler(reg *registry.InMemory) gin.HandlerFunc {
+// `tools/list` is scoped by the authenticated principal's org so each
+// tenant only sees its own skills. Unit tests that don't go through the
+// auth middleware may inject a Principal via auth.InjectPrincipal.
+func Handler(reg registry.Registry) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req jsonRPCRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -68,8 +72,26 @@ func Handler(reg *registry.InMemory) gin.HandlerFunc {
 			})
 
 		case "tools/list":
-			tools := make([]gin.H, 0)
-			for _, s := range reg.List() {
+			p, ok := auth.PrincipalFromContext(c.Request.Context())
+			if !ok {
+				c.JSON(http.StatusUnauthorized, jsonRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error:   &jsonRPCError{Code: -32001, Message: "unauthenticated"},
+				})
+				return
+			}
+			skills, err := reg.List(c.Request.Context(), p.OrgID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, jsonRPCResponse{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error:   &jsonRPCError{Code: -32000, Message: err.Error()},
+				})
+				return
+			}
+			tools := make([]gin.H, 0, len(skills))
+			for _, s := range skills {
 				tools = append(tools, gin.H{
 					"name":        s.QualifiedName(),
 					"description": s.Description,
