@@ -1,0 +1,38 @@
+{
+  "name": "@skill-cloud/client",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Skill Cloud — discover and invoke remote agent skills.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  },
+  "keywords": [
+    "agent",
+    "skills",
+    "mcp",
+    "skill-cloud"
+  ]
+}

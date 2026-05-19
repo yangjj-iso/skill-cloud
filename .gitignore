@@ -1,0 +1,45 @@
+# Go
+server/bin/
+server/dist/
+server/*.test
+server/*.out
+server/coverage.out
+server/coverage.html
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.whl
+
+# Node / TS
+node_modules/
+sdk/typescript/dist/
+sdk/typescript/*.tsbuildinfo
+.npm/
+.pnpm-store/
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Logs / tmp
+*.log
+tmp/
