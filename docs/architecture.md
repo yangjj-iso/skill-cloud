@@ -14,7 +14,7 @@
 | **SDKs** | Python (httpx), TS (fetch) | Thin HTTP clients |
 | **CLI** | Cobra (Go) | `skill init / push / list / call / logs` |
 
-## Request flow — REST invocation (docker runtime)
+## Request flow — REST invocation
 
 ```
 Local Agent
@@ -22,31 +22,45 @@ Local Agent
   ▼
 API Server
   ├─ Auth: resolve api_key → org/user
-  ├─ Registry: load skill manifest + latest version
-  ├─ Validate input against manifest.inputs schema
-  └─ Dispatch to Runtime
-        ├─ runtime.type == docker
-        │     │  pull image (cached) + start container with
-        │     │  --network=none|whitelist, --memory, --cpus, --rm
-        │     │  pipe inputs as JSON to stdin
-        │     │  read JSON from stdout (up to size limit)
-        │     │  kill on timeout
+  ├─ Rate-limit: 60 req/min/api_key default (sliding window, 429 with Retry-After)
+  ├─ Registry: load skill manifest (org-scoped)
+  └─ Dispatcher.Run(skill, input)
+        ├─ runtime.type == docker  → DockerRunner
+        │     │  docker run --rm -i \
+        │     │             --network=none --read-only --cap-drop ALL \
+        │     │             --security-opt no-new-privileges \
+        │     │             --user nobody --pids-limit 128 \
+        │     │             --memory <manifest.memory_mb>m --cpus 1.0 \
+        │     │             [--entrypoint <manifest.entrypoint>] \
+        │     │             <manifest.image>
+        │     │  ← stdin: input JSON
+        │     │  → stdout: output JSON (capped at 1 MiB)
+        │     │  context.WithTimeout(manifest.timeout_seconds) → SIGKILL on deadline
         │     ▼
-        └─ runtime.type == http_proxy
-              │  POST to runtime.url with input JSON
-              │  timeout + bounded retries on idempotent failures
+        └─ runtime.type == http_proxy  → HTTPProxy
+              │  POST manifest.url, Content-Type: application/json
+              │  context.WithTimeout(manifest.timeout_seconds)
+              │  response body capped at 1 MiB; non-2xx → status=error
               ▼
-  ◀── 200 OK { output: ..., status: ok, invocation_id }
-       writes invocation row to Postgres (input, output, latency, status)
+  ◀── { skill, status, output, error? }
+       status=ok    → HTTP 200
+       status=error → HTTP 502 Bad Gateway (body still carries error string)
+       status=timeout → HTTP 504 Gateway Timeout
+       always writes one invocation row: org/user/api_key, status,
+       latency_ms, input_bytes, output_bytes, caller_ip, user_agent,
+       error_message
 ```
 
 ## Request flow — MCP
 
 The `/mcp` endpoint speaks JSON-RPC 2.0. After `initialize`, the client calls
-`tools/list` and receives every skill (filtered by org). When the client calls
-`tools/call` with `name = "acme/hello"`, the handler routes through the **same
-runtime dispatcher** as the REST path, so behavior, logging, and quotas are
-identical.
+`tools/list` and receives every skill (filtered by org, with runtime details
+redacted — see *Anti-theft* below). When the client calls `tools/call` with
+`name = "acme/hello"`, the handler routes through the **same runtime
+dispatcher** as the REST path, so behaviour, logging, and quotas are identical.
+A non-`ok` dispatcher result is surfaced as `isError: true` in the MCP
+response, with the error message as the `text` content; the JSON-RPC envelope
+itself still returns 200 so the MCP client can render the failure inline.
 
 ## Multi-tenancy
 

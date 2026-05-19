@@ -9,6 +9,7 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/mcp"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 // devOrgID is the well-known org used when the server runs without a real
@@ -29,6 +30,7 @@ type Server struct {
 	registry    registry.Registry
 	auth        *auth.Service
 	invocations invocations.Store
+	dispatcher  *runtime.Dispatcher
 	rateLimit   RateLimitConfig
 	trustProxy  bool
 }
@@ -43,7 +45,12 @@ type Options struct {
 	Registry    registry.Registry
 	Auth        *auth.Service
 	Invocations invocations.Store
-	RateLimit   RateLimitConfig
+	// Dispatcher executes skill invocations. When nil, the server
+	// constructs a dispatcher that knows about the HTTP-proxy runtime
+	// only; docker support is opt-in (main.go installs it when the
+	// docker binary is available).
+	Dispatcher *runtime.Dispatcher
+	RateLimit  RateLimitConfig
 	// TrustProxy controls whether X-Forwarded-For / X-Real-IP are honoured
 	// when resolving the caller IP. Enable only when the server sits
 	// behind a trusted load balancer.
@@ -65,6 +72,10 @@ func NewServer(cfg Config, opts Options) *Server {
 	if inv == nil {
 		inv = invocations.NewMemory()
 	}
+	disp := opts.Dispatcher
+	if disp == nil {
+		disp = runtime.NewDispatcher(nil, runtime.NewHTTPProxy(nil))
+	}
 	rl := opts.RateLimit
 	if rl.RequestsPerMinute == 0 {
 		rl = DefaultRateLimit
@@ -76,6 +87,7 @@ func NewServer(cfg Config, opts Options) *Server {
 		registry:    reg,
 		auth:        opts.Auth,
 		invocations: inv,
+		dispatcher:  disp,
 		rateLimit:   rl,
 		trustProxy:  opts.TrustProxy,
 	}
@@ -136,6 +148,7 @@ func (s *Server) routes() {
 	mcpGroup.POST("", mcp.Handler(s.registry, mcp.Options{
 		Invocations: s.invocations,
 		CallerIP:    callerIPFromContext,
+		Dispatcher:  s.dispatcher,
 	}))
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/api"
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 // helloManifest returns a fully-formed docker-runtime manifest used by
@@ -164,7 +165,10 @@ func TestCallerIPTrustsProxyHeaderOnlyWhenEnabled(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{TrustProxy: tc.trustProxy})
+			s := api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{
+				TrustProxy: tc.trustProxy,
+				Dispatcher: runtime.NewDispatcher(stubRunner{}, stubRunner{}),
+			})
 			p := auth.PrincipalForOrg(uuid.New())
 			registerSkill(t, s, p, manifest)
 
@@ -194,7 +198,8 @@ func TestRateLimit429AndHeaders(t *testing.T) {
 	// Limit = 2 requests per minute. Use a fresh server (no skills
 	// registered) so the rate-limit budget isn't spent before the test.
 	s := api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{
-		RateLimit: api.RateLimitConfig{RequestsPerMinute: 2},
+		RateLimit:  api.RateLimitConfig{RequestsPerMinute: 2},
+		Dispatcher: runtime.NewDispatcher(stubRunner{}, stubRunner{}),
 	})
 	p := auth.Principal{OrgID: uuid.New(), APIKeyID: uuid.New()}
 

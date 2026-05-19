@@ -44,16 +44,28 @@
 
 ### M2 — Real runtime dispatch
 
-- [ ] `runtime/docker_runner.go` — one-shot container w/ resource limits, stdin/stdout JSON contract
-- [ ] `runtime/http_proxy.go` — forward + retry + timeout
-- [ ] Skill code upload → MinIO; layer it into the container at run time
-- [ ] Invocation log written to Postgres
+- [x] `server/internal/runtime/` package: `Dispatcher` + `Runner` interface
+- [x] `runtime/docker.go` — sandboxed one-shot container
+      (`--rm --network=none --read-only --cap-drop ALL --user nobody
+      --pids-limit --memory --cpus --security-opt no-new-privileges`),
+      stdin/stdout JSON contract, hard timeout, 1 MiB stdout cap
+- [x] `runtime/http.go` — POST forward, context-deadline timeout,
+      response body cap, JSON validation
+- [x] `Dispatcher` applies manifest-or-default resource limits, returns
+      `Result{status, output, output_bytes, error_message}`
+- [x] REST `/v1/skills/:ns/:name/invoke` and MCP `tools/call` both
+      route through the dispatcher; the audit log records the real
+      status (`ok` / `error` / `timeout`) and output bytes
+- [x] Operator switches: `SKILLCLOUD_DOCKER_BINARY` (path / `disabled`)
+- [ ] *Follow-up:* upload skill source to MinIO and use it instead of
+      a pre-built image (currently the manifest must reference an image
+      that's already pushed to a registry the host can pull from)
 
 ### M3 — CLI + end-to-end
 
-- [ ] `skill` CLI (Cobra): `init`, `push`, `list`, `call`, `logs`
+- [ ] `skill` CLI (Cobra): `init`, `login`, `push`, `list`, `call`, `logs`, `stats`
+- [ ] Config: `~/.skillcloud/config.yaml` or `SKILLCLOUD_API_KEY` env
 - [ ] `examples/hello-skill` end-to-end: push → list → call → see log
-- [ ] MCP `tools/call` routes through the real dispatcher
 
 ### M4 — Hardening / P1
 

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -13,6 +12,7 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 func (s *Server) listSkills(c *gin.Context) {
@@ -131,20 +131,30 @@ func (s *Server) invokeSkill(c *gin.Context) {
 		input = map[string]any{}
 	}
 
-	// Real runtime dispatch is not yet implemented — return a stub
-	// response so the SDK / MCP integration can be developed in parallel.
-	output := gin.H{
+	result, _ := s.dispatcher.Run(c.Request.Context(), runtime.Request{Skill: skill, Input: input})
+
+	response := gin.H{
 		"skill":  skill.QualifiedName(),
-		"input":  input,
-		"output": gin.H{"message": "stub invocation — runtime dispatch not yet implemented"},
-		"status": "ok",
+		"status": result.Status,
+		"output": result.Output,
 	}
-	var buf bytes.Buffer
-	_ = json.NewEncoder(&buf).Encode(output)
+	if result.ErrorMessage != "" {
+		response["error"] = result.ErrorMessage
+	}
 
-	s.recordInvocation(c, p, skill, started, "ok", "", len(rawBody), buf.Len())
+	s.recordInvocation(c, p, skill, started, result.Status, result.ErrorMessage, len(rawBody), result.OutputBytes)
 
-	c.JSON(http.StatusOK, output)
+	// Status code reflects whether the skill executed successfully. We
+	// still write the body (including the error message) so callers can
+	// see what went wrong without scraping logs.
+	code := http.StatusOK
+	switch result.Status {
+	case runtime.StatusTimeout:
+		code = http.StatusGatewayTimeout
+	case runtime.StatusError:
+		code = http.StatusBadGateway
+	}
+	c.JSON(code, response)
 }
 
 func (s *Server) getSkillStats(c *gin.Context) {

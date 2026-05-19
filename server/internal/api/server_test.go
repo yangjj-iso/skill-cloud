@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,14 +15,36 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/api"
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
+// stubRunner is a deterministic in-process Runner used by the api
+// package's unit tests. It echoes its input back as the output so
+// assertions can pin to a known shape without needing docker / a real
+// HTTP server.
+type stubRunner struct{}
+
+func (stubRunner) Run(_ context.Context, req runtime.Request) (runtime.Result, error) {
+	output := map[string]any{
+		"echoed": req.Input,
+		"skill":  req.Skill.QualifiedName(),
+	}
+	body, _ := json.Marshal(output)
+	return runtime.Result{
+		Status:      runtime.StatusOK,
+		Output:      output,
+		OutputBytes: len(body),
+	}, nil
+}
+
 // newTestServer constructs a server with the default in-memory registry
-// and no auth middleware. Tests inject a Principal directly via the
-// request context using `withPrincipal`.
+// and a stub runner for both runtime types. Tests inject a Principal
+// directly via the request context using `withPrincipal`.
 func newTestServer(t *testing.T) *api.Server {
 	t.Helper()
-	return api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{})
+	return api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{
+		Dispatcher: runtime.NewDispatcher(stubRunner{}, stubRunner{}),
+	})
 }
 
 // withPrincipal returns a copy of req with the given Principal attached to
@@ -78,7 +101,7 @@ func TestCreateAndGetSkill(t *testing.T) {
 	assert.Contains(t, rec2.Body.String(), `"acme"`)
 }
 
-func TestInvokeSkillReturnsStub(t *testing.T) {
+func TestInvokeSkillDispatchesToRunner(t *testing.T) {
 	s := newTestServer(t)
 	p := auth.PrincipalForOrg(uuid.New())
 
@@ -103,8 +126,67 @@ func TestInvokeSkillReturnsStub(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/skills/acme/hello/invoke", bytes.NewReader(input))
 	req2.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(rec2, withPrincipal(req2, p))
-	assert.Equal(t, http.StatusOK, rec2.Code)
-	assert.Contains(t, rec2.Body.String(), `"acme/hello"`)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var resp struct {
+		Skill  string         `json:"skill"`
+		Status string         `json:"status"`
+		Output map[string]any `json:"output"`
+	}
+	require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &resp))
+	assert.Equal(t, "acme/hello", resp.Skill)
+	assert.Equal(t, "ok", resp.Status)
+	echoed, ok := resp.Output["echoed"].(map[string]any)
+	require.True(t, ok, "stub runner should echo input back")
+	assert.Equal(t, "world", echoed["name"])
+}
+
+func TestInvokeSkillSurfacesRuntimeError(t *testing.T) {
+	// The dispatcher returns a 502 with the error body when the runner
+	// reports `error` status — proves invoke no longer hard-codes 200.
+	failing := &runnerFunc{fn: func(_ context.Context, _ runtime.Request) (runtime.Result, error) {
+		return runtime.Result{
+			Status:       runtime.StatusError,
+			ErrorMessage: "boom",
+		}, nil
+	}}
+	s := api.NewServer(api.Config{ListenAddr: ":0"}, api.Options{
+		Dispatcher: runtime.NewDispatcher(failing, failing),
+	})
+	p := auth.PrincipalForOrg(uuid.New())
+
+	manifest := models.SkillManifest{
+		Namespace: "acme",
+		Name:      "boom",
+		Version:   "0.1.0",
+		Runtime: models.Runtime{
+			Type:  models.RuntimeDocker,
+			Image: "ubuntu:24.04",
+		},
+	}
+	body, _ := json.Marshal(manifest)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/skills", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec, withPrincipal(req, p))
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/skills/acme/boom/invoke", bytes.NewReader([]byte(`{}`)))
+	req2.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(rec2, withPrincipal(req2, p))
+	assert.Equal(t, http.StatusBadGateway, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), "boom")
+}
+
+// runnerFunc lets a test supply an ad-hoc runner without defining a
+// new type for each case.
+type runnerFunc struct {
+	fn func(ctx context.Context, req runtime.Request) (runtime.Result, error)
+}
+
+func (r *runnerFunc) Run(ctx context.Context, req runtime.Request) (runtime.Result, error) {
+	return r.fn(ctx, req)
 }
 
 func TestInvalidManifestRejected(t *testing.T) {

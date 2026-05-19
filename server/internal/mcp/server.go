@@ -21,6 +21,7 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 const protocolVersion = "2024-11-05"
@@ -50,10 +51,12 @@ type CallerIPFunc func(c *gin.Context) string
 
 // Options bundles MCP handler dependencies. All fields are optional;
 // nil values disable the corresponding feature (invocation logging is
-// skipped if Invocations is nil, etc.).
+// skipped if Invocations is nil, runtime dispatch is replaced with a
+// stub if Dispatcher is nil, etc.).
 type Options struct {
 	Invocations invocations.Store
 	CallerIP    CallerIPFunc
+	Dispatcher  *runtime.Dispatcher
 }
 
 // Handler returns a gin handler that implements the MCP JSON-RPC
@@ -183,30 +186,60 @@ func handleToolsCall(c *gin.Context, req jsonRPCRequest, reg registry.Registry, 
 		return
 	}
 
-	// Compute payload size for accounting.
+	// Coerce arguments into the input map shape the dispatcher expects.
 	inputBytes := 0
-	if args, ok := req.Params["arguments"]; ok {
-		if b, err := json.Marshal(args); err == nil {
+	input := map[string]any{}
+	if raw, ok := req.Params["arguments"]; ok {
+		if b, err := json.Marshal(raw); err == nil {
 			inputBytes = len(b)
+		}
+		if m, ok := raw.(map[string]any); ok {
+			input = m
 		}
 	}
 
-	result := gin.H{
+	var runResult runtime.Result
+	if opts.Dispatcher != nil {
+		runResult, _ = opts.Dispatcher.Run(c.Request.Context(), runtime.Request{Skill: skill, Input: input})
+	} else {
+		runResult = runtime.Result{Status: runtime.StatusError, ErrorMessage: "dispatcher not configured"}
+	}
+
+	// MCP returns tool output as a list of content items. We serialise
+	// the dispatcher's output map to JSON text — clients can re-parse
+	// it if they need structured access.
+	body, _ := json.Marshal(runResult.Output)
+	if len(body) == 0 || string(body) == "null" {
+		body = []byte("{}")
+	}
+	mcpResult := gin.H{
 		"content": []gin.H{
 			{
 				"type": "text",
-				"text": "stub invocation — runtime dispatch not yet implemented",
+				"text": string(body),
 			},
 		},
 	}
-	resultBytes, _ := json.Marshal(result)
+	if runResult.Status != runtime.StatusOK {
+		mcpResult["isError"] = true
+		mcpResult["content"] = []gin.H{
+			{
+				"type": "text",
+				"text": runResult.ErrorMessage,
+			},
+		}
+	}
 
-	logInvocation(c, opts, p, skill, started, "ok", "", inputBytes, len(resultBytes))
+	outputBytes := runResult.OutputBytes
+	if outputBytes == 0 {
+		outputBytes = len(body)
+	}
+	logInvocation(c, opts, p, skill, started, runResult.Status, runResult.ErrorMessage, inputBytes, outputBytes)
 
 	c.JSON(http.StatusOK, jsonRPCResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result:  result,
+		Result:  mcpResult,
 	})
 }
 

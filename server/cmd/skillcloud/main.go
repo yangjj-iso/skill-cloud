@@ -13,11 +13,17 @@
 //	                          behind a trusted load balancer.
 //	SKILLCLOUD_RATE_LIMIT     Per-API-key rate limit in requests-per-minute
 //	                          (integer). Empty / 0 keeps the default 60.
+//	SKILLCLOUD_DOCKER_BINARY  Path to the `docker` CLI to use for the
+//	                          docker runtime. Defaults to "docker"; set
+//	                          to a non-empty path to override or to
+//	                          "disabled" to leave the docker runtime
+//	                          unconfigured (HTTP-proxy skills still work).
 package main
 
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +34,7 @@ import (
 	"github.com/yangjj-iso/skill-cloud/server/internal/db"
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 func main() {
@@ -43,6 +50,26 @@ func main() {
 			log.Printf("warning: invalid SKILLCLOUD_RATE_LIMIT=%q, falling back to default", raw)
 		}
 	}
+
+	// Build the runtime dispatcher. http_proxy is always available; the
+	// docker runner needs the binary on PATH. Operators can disable
+	// docker explicitly with SKILLCLOUD_DOCKER_BINARY=disabled.
+	httpProxy := runtime.NewHTTPProxy(&http.Client{})
+	var dockerRunner runtime.Runner
+	if binary := os.Getenv("SKILLCLOUD_DOCKER_BINARY"); binary != "disabled" {
+		if binary == "" {
+			binary = "docker"
+		}
+		runner, err := runtime.NewDocker(binary)
+		if err != nil {
+			log.Printf("warning: docker runtime unavailable (%v); only http_proxy skills will run", err)
+		} else {
+			dockerRunner = runner
+		}
+	} else {
+		log.Print("docker runtime disabled via SKILLCLOUD_DOCKER_BINARY=disabled")
+	}
+	opts.Dispatcher = runtime.NewDispatcher(dockerRunner, httpProxy)
 
 	if dsn == "" {
 		log.Print("warning: SKILLCLOUD_DB_DSN not set; starting in unauthenticated in-memory mode")
