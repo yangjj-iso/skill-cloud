@@ -13,13 +13,14 @@
 - [x] GitHub Actions CI (Go + Python + TS)
 - [x] Architecture, manifest, and requirements docs
 
-### M1 — Persistence + auth (next)
+### M1 — Persistence + auth
 
-- [ ] Postgres schema + migrations (sqlc or goose)
-- [ ] `orgs` / `users` / `api_keys` / `skills` / `skill_versions` tables
-- [ ] Replace `InMemory` registry with Postgres-backed one
-- [ ] API key auth middleware + row-level `org_id` filtering
-- [ ] `POST /v1/auth/orgs`, `POST /v1/auth/api_keys`
+- [x] Postgres schema + embedded migrations (pgx + `embed.FS`)
+- [x] `orgs` / `users` / `org_members` / `api_keys` / `skills` / `skill_versions` / `invocations` tables
+- [x] Replace `InMemory` registry with Postgres-backed one (org-scoped queries)
+- [x] API key auth middleware + row-level `org_id` filtering
+- [x] `POST /v1/auth/orgs`, `POST /v1/auth/users`, `POST /v1/auth/api_keys` bootstrap endpoints
+- [x] CI runs Go unit + Postgres integration tests
 
 ### M2 — Real runtime dispatch
 

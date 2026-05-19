@@ -58,20 +58,38 @@ identical.
 - `skills` carry `(namespace, name)`. `namespace` defaults to the org's slug but
   can be any string the org owns (claimed namespaces table).
 
-## Schema (sketch)
+## Schema
+
+Implemented in `server/internal/db/migrations/001_initial.sql`. Tables
+are applied on every startup via an embedded migration runner
+(`server/internal/db/db.go`).
 
 ```
 orgs           (id, slug, name, created_at)
-users          (id, email, password_hash, created_at)
+users          (id, email, created_at)
 org_members    (org_id, user_id, role)
 api_keys       (id, org_id, user_id, prefix, hash, name, last_used_at, created_at)
-namespaces     (name, org_id)
-skills         (id, namespace, name, org_id, latest_version, created_at)
-skill_versions (id, skill_id, version, manifest_json, storage_key, created_at)
+skills         (id, org_id, namespace, name, description, latest_version,
+                created_at, updated_at)         UNIQUE (org_id, namespace, name)
+skill_versions (id, skill_id, version, manifest, storage_key, created_at)
+                                                UNIQUE (skill_id, version)
 invocations    (id, org_id, user_id, skill_id, version, status,
-                input_json, output_json, started_at, finished_at, latency_ms,
-                error_message)
+                input, output, error_message, started_at, finished_at, latency_ms)
 ```
+
+## Authentication
+
+- Bootstrap endpoints (`POST /v1/auth/orgs`, `/v1/auth/users`,
+  `/v1/auth/api_keys`) create the first tenant and issue an API key.
+- API keys are returned in the form `<prefix>.<secret>` exactly once at
+  creation time. Only the prefix and a bcrypt hash of the secret are
+  stored; the plaintext secret is never persisted.
+- Every request to `/v1/*` and `/mcp` carries
+  `Authorization: Bearer <prefix>.<secret>`. The middleware looks up the
+  key by `prefix`, bcrypt-verifies the secret, and injects a
+  `Principal{OrgID, UserID, APIKeyID}` into the request context.
+- Handlers read the principal from context and pass `OrgID` to the
+  registry so every read/write is row-level scoped to the caller's org.
 
 ## Sandbox security (MVP)
 
