@@ -55,7 +55,7 @@ func (m SkillManifest) QualifiedName() string {
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$`)
+var semverRe = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 
 // Validate checks that the manifest is well-formed.
 func (m SkillManifest) Validate() error {

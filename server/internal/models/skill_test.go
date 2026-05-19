@@ -53,6 +53,42 @@ func TestSkillManifestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "semver with prerelease",
+			m: models.SkillManifest{
+				Namespace: "acme",
+				Name:      "hello",
+				Version:   "1.0.0-alpha",
+				Runtime:   models.Runtime{Type: models.RuntimeDocker, Image: "x"},
+			},
+		},
+		{
+			name: "semver with build metadata",
+			m: models.SkillManifest{
+				Namespace: "acme",
+				Name:      "hello",
+				Version:   "1.0.0+build.1",
+				Runtime:   models.Runtime{Type: models.RuntimeDocker, Image: "x"},
+			},
+		},
+		{
+			name: "semver with prerelease and build metadata",
+			m: models.SkillManifest{
+				Namespace: "acme",
+				Name:      "hello",
+				Version:   "1.0.0-alpha+001",
+				Runtime:   models.Runtime{Type: models.RuntimeDocker, Image: "x"},
+			},
+		},
+		{
+			name: "semver with dotted prerelease and build metadata",
+			m: models.SkillManifest{
+				Namespace: "acme",
+				Name:      "hello",
+				Version:   "1.0.0-beta.1+build.123",
+				Runtime:   models.Runtime{Type: models.RuntimeDocker, Image: "x"},
+			},
+		},
+		{
 			name: "docker missing image",
 			m: models.SkillManifest{
 				Namespace: "acme",
