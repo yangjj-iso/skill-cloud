@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"sync"
@@ -36,6 +37,48 @@ func newRateLimiter(limit int) *rateLimiter {
 	return &rateLimiter{limit: limit, hits: map[string][]time.Time{}}
 }
 
+// startSweeper periodically removes map entries whose newest hit is
+// older than the sliding window. Without this, every distinct API key
+// (or in dev mode, every distinct caller IP) ever observed leaks one
+// map entry — a slow but real memory growth on long-running servers.
+//
+// The sweeper terminates when ctx is cancelled. Production passes a
+// background context; tests use a short-lived one so the goroutine
+// doesn't outlive the test.
+func (rl *rateLimiter) startSweeper(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				rl.sweep(now)
+			}
+		}
+	}()
+}
+
+// sweep deletes empty or fully-expired keys. Exposed for unit tests.
+func (rl *rateLimiter) sweep(now time.Time) {
+	cutoff := now.Add(-time.Minute)
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for k, win := range rl.hits {
+		if len(win) == 0 || win[len(win)-1].Before(cutoff) {
+			delete(rl.hits, k)
+		}
+	}
+}
+
+// size returns the number of tracked keys. Exposed for unit tests.
+func (rl *rateLimiter) size() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return len(rl.hits)
+}
+
 // allow records a request for key at `now`. It returns (allowed,
 // remaining, resetAt) where resetAt is when the oldest in-window hit
 // will fall out of the window.
@@ -60,7 +103,13 @@ func (rl *rateLimiter) allow(key string, now time.Time) (bool, int, time.Time) {
 	}
 
 	window = append(window, now)
-	rl.hits[key] = window
+	// Empty windows are deleted instead of writing back an empty slice
+	// so a one-shot caller doesn't leave a permanent map entry behind.
+	if len(window) == 0 {
+		delete(rl.hits, key)
+	} else {
+		rl.hits[key] = window
+	}
 	remaining := rl.limit - len(window)
 	reset := window[0].Add(time.Minute)
 	return true, remaining, reset
@@ -73,6 +122,11 @@ func rateLimitMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 		return func(c *gin.Context) { c.Next() }
 	}
 	rl := newRateLimiter(cfg.RequestsPerMinute)
+	// The middleware owns the limiter; it lives for the process
+	// lifetime. context.Background() is appropriate — there is no
+	// graceful shutdown hook for the gin router and the sweeper goroutine
+	// is happy to die with the process.
+	rl.startSweeper(context.Background(), time.Minute)
 	return func(c *gin.Context) {
 		key := rateLimitKey(c)
 		allowed, remaining, reset := rl.allow(key, time.Now())

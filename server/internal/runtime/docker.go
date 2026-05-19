@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -88,10 +89,19 @@ func (d *Docker) Run(ctx context.Context, req Request) (Result, error) {
 		"--memory", strconv.Itoa(req.Skill.Runtime.MemoryMB) + "m",
 		"--cpus", "1.0",
 	}
-	if req.Skill.Runtime.Entrypoint != "" {
-		args = append(args, "--entrypoint", req.Skill.Runtime.Entrypoint)
+	// Docker's --entrypoint flag only accepts the executable name; any
+	// additional words (e.g. `python -m hello`) must be appended as CMD
+	// arguments *after* the image name. Splitting on whitespace mirrors
+	// how a user would type the command at a prompt and matches the
+	// `ENTRYPOINT` shell-form convention used in the example skills.
+	var entrypointArgs []string
+	if ep := strings.TrimSpace(req.Skill.Runtime.Entrypoint); ep != "" {
+		parts := strings.Fields(ep)
+		args = append(args, "--entrypoint", parts[0])
+		entrypointArgs = parts[1:]
 	}
 	args = append(args, image)
+	args = append(args, entrypointArgs...)
 
 	stdout, stderr, exitCode, runErr := d.invokeDocker(runCtx, d.binary, args, stdin)
 

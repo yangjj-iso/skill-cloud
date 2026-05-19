@@ -58,6 +58,41 @@ func TestDockerRunHappyPath(t *testing.T) {
 	assert.Contains(t, string(seenStdin), `"world"`)
 }
 
+func TestDockerRunMultiWordEntrypoint(t *testing.T) {
+	// Regression: `entrypoint: "python -m hello"` must turn into
+	//   --entrypoint python <image> -m hello
+	// not
+	//   --entrypoint "python -m hello" <image>
+	var seenArgs []string
+	d := newFakeDocker(t, func(_ context.Context, _ string, args []string, _ []byte) ([]byte, []byte, int, error) {
+		seenArgs = args
+		return []byte(`{}`), nil, 0, nil
+	})
+	skill := dockerManifest()
+	skill.Runtime.Entrypoint = "python -m hello"
+
+	res, err := d.Run(context.Background(), Request{Skill: skill})
+	require.NoError(t, err)
+	require.Equal(t, StatusOK, res.Status)
+
+	// Locate --entrypoint and assert it gets exactly one token, then
+	// the image, then the remaining argv tail.
+	idx := -1
+	for i, a := range seenArgs {
+		if a == "--entrypoint" {
+			idx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, idx, "--entrypoint must be present")
+	assert.Equal(t, "python", seenArgs[idx+1], "--entrypoint receives only the executable")
+	// The image must come after the --entrypoint pair and before the
+	// remaining tokens.
+	imageIdx := idx + 2
+	assert.Equal(t, "alpine:3.20", seenArgs[imageIdx], "image must come right after --entrypoint <exec>")
+	assert.Equal(t, []string{"-m", "hello"}, seenArgs[imageIdx+1:], "remaining tokens become CMD args after image")
+}
+
 func TestDockerRunNonZeroExitBecomesError(t *testing.T) {
 	d := newFakeDocker(t, func(_ context.Context, _ string, _ []string, _ []byte) ([]byte, []byte, int, error) {
 		return nil, []byte("boom\n"), 1, nil

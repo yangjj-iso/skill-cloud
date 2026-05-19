@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -185,6 +186,12 @@ func (s *Server) getSkillStats(c *gin.Context) {
 // recordInvocation writes an invocation row. Failures are logged but do
 // not fail the request — losing audit fidelity is preferable to failing
 // the user-facing call.
+//
+// The write deliberately uses a fresh context derived from
+// context.Background() so a client that disconnects after the skill
+// runs but before the response flushes can't cancel the audit insert.
+// The MCP handler does the same. We cap the write at 5 seconds so a
+// broken Postgres can't pin a goroutine forever.
 func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models.SkillManifest, started time.Time, status, errMsg string, inputBytes, outputBytes int) {
 	entry := invocations.Entry{
 		OrgID:        p.OrgID,
@@ -202,7 +209,9 @@ func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models
 		UserAgent:    c.Request.UserAgent(),
 		StartedAt:    started,
 	}
-	if err := s.invocations.Log(c.Request.Context(), entry); err != nil {
+	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.invocations.Log(logCtx, entry); err != nil {
 		log.Printf("invocations: log %s/%s: %v", skill.Namespace, skill.Name, err)
 	}
 }
