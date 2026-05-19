@@ -270,3 +270,49 @@ func TestMCPToolsCallRecordsInvocation(t *testing.T) {
 	require.NoError(t, json.Unmarshal(statsRec.Body.Bytes(), &stats))
 	assert.Equal(t, int64(1), stats.Total, "MCP tools/call must record an invocation")
 }
+
+func TestSkillLogsEndpoint(t *testing.T) {
+	s := newTestServer(t)
+	p := auth.PrincipalForOrg(uuid.New())
+	registerSkill(t, s, p, helloManifest())
+
+	// Two invocations, second one tagged with a different caller IP
+	// so we can verify newest-first ordering.
+	for i, ip := range []string{"203.0.113.10:1", "203.0.113.20:2"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/skills/acme/hello/invoke", bytes.NewReader([]byte(`{"name":"world"}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = ip
+		s.Handler().ServeHTTP(rec, withPrincipal(req, p))
+		require.Equal(t, http.StatusOK, rec.Code, "invocation %d", i)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/skills/acme/hello/logs", nil)
+	s.Handler().ServeHTTP(rec, withPrincipal(req, p))
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+
+	var resp struct {
+		Invocations []struct {
+			Status   string `json:"status"`
+			CallerIP string `json:"caller_ip"`
+		} `json:"invocations"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Invocations, 2)
+	// Newest first.
+	assert.Equal(t, "203.0.113.20", resp.Invocations[0].CallerIP)
+	assert.Equal(t, "203.0.113.10", resp.Invocations[1].CallerIP)
+}
+
+func TestSkillLogsScopedToOwningOrg(t *testing.T) {
+	s := newTestServer(t)
+	orgA := auth.PrincipalForOrg(uuid.New())
+	orgB := auth.PrincipalForOrg(uuid.New())
+	registerSkill(t, s, orgA, helloManifest())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/skills/acme/hello/logs", nil)
+	s.Handler().ServeHTTP(rec, withPrincipal(req, orgB))
+	assert.Equal(t, http.StatusNotFound, rec.Code, "org B must not see org A's logs")
+}

@@ -76,6 +76,47 @@ func (p *Postgres) Log(ctx context.Context, e Entry) error {
 	return nil
 }
 
+// Recent returns the most recent `limit` invocations for one skill,
+// newest first. limit <= 0 is treated as 50; the query caps at 200
+// regardless to keep one bad caller from yanking the whole table over
+// the wire.
+func (p *Postgres) Recent(ctx context.Context, orgID uuid.UUID, namespace, name string, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT i.status, i.latency_ms, i.input_bytes, i.output_bytes,
+		       i.started_at, COALESCE(host(i.caller_ip), ''), COALESCE(i.user_agent, ''),
+		       COALESCE(i.error_message, ''), s.namespace, s.name, i.version
+		FROM invocations i
+		JOIN skills s ON s.id = i.skill_id
+		WHERE i.org_id = $1 AND s.namespace = $2 AND s.name = $3
+		ORDER BY i.started_at DESC
+		LIMIT $4
+	`, orgID, namespace, name, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent invocations: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Entry, 0, limit)
+	for rows.Next() {
+		var e Entry
+		e.OrgID = orgID
+		if err := rows.Scan(
+			&e.Status, &e.LatencyMS, &e.InputBytes, &e.OutputBytes,
+			&e.StartedAt, &e.CallerIP, &e.UserAgent,
+			&e.ErrorMessage, &e.Namespace, &e.Name, &e.Version,
+		); err != nil {
+			return nil, fmt.Errorf("scan invocation: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // Stats aggregates the invocations table for one skill.
 func (p *Postgres) Stats(ctx context.Context, orgID uuid.UUID, namespace, name string) (Stats, error) {
 	var (

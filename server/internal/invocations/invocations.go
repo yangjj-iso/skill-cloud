@@ -41,4 +41,8 @@ type Stats struct {
 type Store interface {
 	Log(ctx context.Context, e Entry) error
 	Stats(ctx context.Context, orgID uuid.UUID, namespace, name string) (Stats, error)
+	// Recent returns the most recent invocations for one skill, newest
+	// first, capped at `limit` rows. Implementations should treat
+	// limit <= 0 as "use a default" (typically 50).
+	Recent(ctx context.Context, orgID uuid.UUID, namespace, name string, limit int) ([]Entry, error)
 }

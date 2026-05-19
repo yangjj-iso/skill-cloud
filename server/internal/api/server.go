@@ -134,6 +134,7 @@ func (s *Server) routes() {
 		v1.GET("/skills/:namespace/:name", s.getSkill)
 		v1.GET("/skills/:namespace/:name/runtime", s.getSkillRuntime)
 		v1.GET("/skills/:namespace/:name/stats", s.getSkillStats)
+		v1.GET("/skills/:namespace/:name/logs", s.listSkillLogs)
 		v1.POST("/skills", s.createSkill)
 		v1.POST("/skills/:namespace/:name/invoke", s.invokeSkill)
 	}
