@@ -1,0 +1,24 @@
+name: weather
+namespace: acme
+version: 0.1.0
+description: "Example http_proxy skill — Skill Cloud forwards the call to an external endpoint."
+tags: [example, weather, proxy]
+
+runtime:
+  type: http_proxy
+  url: "https://example.com/api/weather"
+  timeout_seconds: 15
+
+inputs:
+  city:
+    type: string
+    required: true
+  units:
+    type: string
+    default: "metric"
+
+outputs:
+  temperature_c:
+    type: number
+  conditions:
+    type: string
