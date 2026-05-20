@@ -37,6 +37,13 @@ type Stats struct {
 	LastCallerIP  string     `json:"last_caller_ip,omitempty"`
 }
 
+// OrgStats summarises invocation history across every skill in one org.
+// Used by the BFF /v1/overview endpoint that powers the Web UI.
+type OrgStats struct {
+	Total   int64 `json:"total"`
+	Last24h int64 `json:"last_24h"`
+}
+
 // Store records invocations and serves aggregate stats.
 type Store interface {
 	Log(ctx context.Context, e Entry) error
@@ -45,4 +52,11 @@ type Store interface {
 	// first, capped at `limit` rows. Implementations should treat
 	// limit <= 0 as "use a default" (typically 50).
 	Recent(ctx context.Context, orgID uuid.UUID, namespace, name string, limit int) ([]Entry, error)
+	// RecentForOrg returns the most recent invocations across every
+	// skill in one org. Used by the Web UI's cross-skill invocations
+	// page; limit <= 0 means "use a default" (typically 100).
+	RecentForOrg(ctx context.Context, orgID uuid.UUID, limit int) ([]Entry, error)
+	// StatsForOrg returns total and 24h invocation counts across every
+	// skill in one org. Used by the /v1/overview BFF endpoint.
+	StatsForOrg(ctx context.Context, orgID uuid.UUID) (OrgStats, error)
 }

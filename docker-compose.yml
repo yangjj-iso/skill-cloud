@@ -43,14 +43,68 @@ services:
       SKILLCLOUD_S3_SECRET_KEY: "minioadmin"
       SKILLCLOUD_S3_BUCKET: "skillcloud"
       SKILLCLOUD_LISTEN_ADDR: ":8080"
+      # The dispatcher shells out to this binary to spawn skill containers.
+      # The CLI talks to the host's docker daemon over the bind-mounted socket
+      # below so the spawned skill containers run as siblings of this server
+      # (not nested inside it). This pattern is convenient for local dev but
+      # NOTE: mounting the docker socket grants the server container root-
+      # equivalent control of the host; do not deploy this compose file
+      # untouched to a shared / production host.
+      SKILLCLOUD_DOCKER_BINARY: "docker"
     ports:
       - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Add the host's docker GID so the non-root user inside the container
+    # can talk to the bind-mounted socket. Override via `DOCKER_GID=$(stat -c
+    # '%g' /var/run/docker.sock) docker compose up` when the host uses a
+    # non-default GID (e.g. some CI runners, rootless docker).
+    group_add:
+      - "${DOCKER_GID:-999}"
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
 
+  # Prometheus scrapes /metrics from the server every 15s. The job is
+  # named "skillcloud" so dashboard panels can target it explicitly.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - server
+
+  # Grafana ships with a pre-provisioned Prometheus datasource pointed
+  # at the Prometheus service above, plus the bundled Skill Cloud
+  # dashboard. Anonymous viewer access is enabled so the local dev
+  # experience needs no login — disable in production.
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   minio_data:
+  prometheus_data:
+  grafana_data:

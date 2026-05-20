@@ -1,0 +1,19 @@
+# Prometheus configuration for the bundled docker-compose stack.
+# Scrapes the Skill Cloud server on its container port (8080) every 15s.
+# Adjust `scrape_interval` and `targets` when running this against a
+# multi-instance deployment.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "skillcloud"
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "server:8080"
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets:
+          - "localhost:9090"

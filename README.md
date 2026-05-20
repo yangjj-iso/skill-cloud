@@ -51,6 +51,7 @@ skill-cloud/
 │   ├── python/             # `pip install skill-cloud`
 │   └── typescript/         # `npm i @skill-cloud/client`
 ├── cli/                    # `skill` CLI (publish, list, invoke)
+├── web/                    # Web UI (Vite + React)
 ├── examples/
 │   ├── hello-skill/        # minimal docker-runtime skill
 │   └── http-proxy-skill/   # external endpoint skill
@@ -67,9 +68,24 @@ skill-cloud/
 git clone https://github.com/yangjj-iso/skill-cloud.git
 cd skill-cloud
 docker compose up -d
-# Server: http://localhost:8080
-# MinIO console: http://localhost:9001 (minioadmin / minioadmin)
+# Server:        http://localhost:8080
+# MinIO console: http://localhost:9001  (minioadmin / minioadmin)
+# Prometheus:    http://localhost:9090
+# Grafana:       http://localhost:3000  (anonymous viewer; admin/admin to edit)
 ```
+
+The bundled compose stack also runs Prometheus (scraping the server's
+`/metrics` endpoint every 15 s) and Grafana (pre-provisioned with a
+Prometheus datasource and a "Skill Cloud — overview" dashboard showing
+per-skill QPS, latency p50/p95/p99, rate-limit drops, and the registry
+size). See [`docs/observability.md`](docs/observability.md) for the
+metric reference.
+
+The server container bind-mounts `/var/run/docker.sock` so the runtime
+dispatcher can launch skill containers on the host's Docker daemon. This
+is convenient for local development but grants the server container
+root-equivalent access to the host — do not deploy the bundled
+`docker-compose.yml` untouched to a shared or production host.
 
 Create an org + API key, then call a skill from Python:
 

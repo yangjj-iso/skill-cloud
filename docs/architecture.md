@@ -36,6 +36,11 @@ API Server
         │     │  ← stdin: input JSON
         │     │  → stdout: output JSON (capped at 1 MiB)
         │     │  context.WithTimeout(manifest.timeout_seconds) → SIGKILL on deadline
+        │     │  When the server itself runs inside docker-compose, the
+        │     │  binary talks to the host's docker daemon over the
+        │     │  bind-mounted /var/run/docker.sock; skill containers
+        │     │  therefore spawn as **siblings** of the server, not nested
+        │     │  inside it.
         │     ▼
         └─ runtime.type == http_proxy  → HTTPProxy
               │  POST manifest.url, Content-Type: application/json
@@ -154,6 +159,14 @@ invocations    (id, org_id, user_id, api_key_id, skill_id, version, status,
 ## Observability
 
 - Structured JSON logs (zerolog or slog).
-- Prometheus `/metrics` (request count / latency, invocation count / latency by
-  status, per-runtime dispatch latency).
+- Prometheus `/metrics` endpoint (unauthenticated by design; restrict
+  at the network layer in production). Series:
+  - `skillcloud_invocations_total{org,namespace,name,status}` — counter
+  - `skillcloud_invocation_latency_seconds{org,namespace,name}` — histogram
+  - `skillcloud_rate_limit_dropped_total{api_key_prefix}` — counter
+  - `skillcloud_skills_registered{org,runtime_type}` — gauge
+  - `skillcloud_http_requests_total{method,route,status_code}` — counter
+- The bundled `docker-compose.yml` runs Prometheus + Grafana with a
+  pre-provisioned datasource and the "Skill Cloud — overview" dashboard.
+  See [`observability.md`](observability.md) for the full reference.
 - OpenTelemetry traces for `request → registry → dispatcher → runtime` (P1).

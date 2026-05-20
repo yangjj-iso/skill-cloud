@@ -34,6 +34,13 @@ docker compose up -d
 - `minio` on `localhost:9000` (unused today, reserved for the M2
   source-upload follow-up)
 
+The server container bind-mounts `/var/run/docker.sock` so the runtime
+dispatcher can launch skill containers on the host's Docker daemon —
+the spawned skill containers run as **siblings** of the server, not
+nested inside it. This is convenient for local development but grants
+the server container root-equivalent access to the host; do not deploy
+the bundled compose file untouched to a shared host.
+
 Wait for the server's healthcheck to pass:
 
 ```bash
