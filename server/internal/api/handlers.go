@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
+	"github.com/yangjj-iso/skill-cloud/server/internal/metrics"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
 	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
@@ -100,6 +102,15 @@ func (s *Server) createSkill(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// Re-count skills in the org and update the Prometheus gauge. The
+	// recount uses a fresh background context so the metric still updates
+	// even if the client disconnects between Upsert returning and the
+	// response flushing.
+	go func(orgID uuid.UUID) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.refreshSkillsGauge(ctx, orgID)
+	}(p.OrgID)
 	c.JSON(http.StatusCreated, skill)
 }
 
@@ -255,6 +266,7 @@ func (s *Server) getSkillStats(c *gin.Context) {
 // The MCP handler does the same. We cap the write at 5 seconds so a
 // broken Postgres can't pin a goroutine forever.
 func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models.SkillManifest, started time.Time, status, errMsg string, inputBytes, outputBytes int) {
+	latency := time.Since(started)
 	entry := invocations.Entry{
 		OrgID:        p.OrgID,
 		UserID:       p.UserID,
@@ -263,7 +275,7 @@ func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models
 		Name:         skill.Name,
 		Version:      skill.Version,
 		Status:       status,
-		LatencyMS:    int(time.Since(started).Milliseconds()),
+		LatencyMS:    int(latency.Milliseconds()),
 		InputBytes:   inputBytes,
 		OutputBytes:  outputBytes,
 		ErrorMessage: errMsg,
@@ -276,6 +288,14 @@ func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models
 	if err := s.invocations.Log(logCtx, entry); err != nil {
 		log.Printf("invocations: log %s/%s: %v", skill.Namespace, skill.Name, err)
 	}
+	// Record the invocation in Prometheus as well. Latency is in seconds
+	// to match the standard prometheus convention; the org label uses the
+	// slug when resolvable to keep dashboards human-readable.
+	metrics.RecordInvocation(
+		s.orgSlugForMetrics(logCtx, p.OrgID),
+		skill.Namespace, skill.Name, status,
+		latency.Seconds(),
+	)
 }
 
 // --- bootstrap auth handlers ---

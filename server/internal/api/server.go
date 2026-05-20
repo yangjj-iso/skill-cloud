@@ -4,10 +4,12 @@ package api
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/mcp"
+	"github.com/yangjj-iso/skill-cloud/server/internal/metrics"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
 	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
@@ -107,10 +109,18 @@ func (s *Server) Run() error {
 
 func (s *Server) routes() {
 	s.engine.Use(clientIPMiddleware(s.trustProxy))
+	s.engine.Use(httpMetricsMiddleware())
 
 	s.engine.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// /metrics is intentionally unauthenticated so Prometheus can scrape
+	// without a bearer token. The endpoint exposes only aggregate platform
+	// telemetry (counters, histograms, gauges) — no per-request payload,
+	// no API key plaintext. Restrict at the network layer (e.g. only the
+	// scraper's IP) in production.
+	s.engine.GET("/metrics", gin.WrapH(promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{})))
 
 	// Bootstrap auth endpoints. These are intentionally unauthenticated
 	// in the MVP so an operator can create the first org/user/api_key.

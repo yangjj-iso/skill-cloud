@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
+	"github.com/yangjj-iso/skill-cloud/server/internal/metrics"
 )
 
 // RateLimitConfig caps how many requests a single API key may make in a
@@ -135,6 +136,7 @@ func rateLimitMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 		c.Header("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
 		if !allowed {
 			c.Header("Retry-After", strconv.Itoa(int(time.Until(reset).Seconds())+1))
+			metrics.RecordRateLimitDrop(rateLimitKeyPrefix(c))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
 			return
 		}
