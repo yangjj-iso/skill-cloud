@@ -2,3 +2,9 @@ node_modules
 dist
 .vite
 .DS_Store
+# tsc output if someone accidentally runs `tsc` without --noEmit.
+# tsconfig.json sets "noEmit": true so this shouldn't appear, but belt
+# and suspenders.
+*.tsbuildinfo
+src/**/*.js
+src/**/*.d.ts
