@@ -55,6 +55,12 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # Add the host's docker GID so the non-root user inside the container
+    # can talk to the bind-mounted socket. Override via `DOCKER_GID=$(stat -c
+    # '%g' /var/run/docker.sock) docker compose up` when the host uses a
+    # non-default GID (e.g. some CI runners, rootless docker).
+    group_add:
+      - "${DOCKER_GID:-999}"
     depends_on:
       postgres:
         condition: service_healthy
