@@ -147,6 +147,10 @@ func (s *Server) routes() {
 		v1.GET("/skills/:namespace/:name/logs", s.listSkillLogs)
 		v1.POST("/skills", s.createSkill)
 		v1.POST("/skills/:namespace/:name/invoke", s.invokeSkill)
+		// BFF endpoints for the Web UI. They re-use the same auth /
+		// rate-limit middleware as the rest of /v1.
+		v1.GET("/overview", s.getOrgOverview)
+		v1.GET("/invocations", s.listOrgInvocations)
 	}
 
 	// MCP endpoint exposes registered skills as MCP tools so any

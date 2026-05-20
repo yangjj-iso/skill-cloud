@@ -51,6 +51,7 @@ skill-cloud/
 │   ├── python/             # `pip install skill-cloud`
 │   └── typescript/         # `npm i @skill-cloud/client`
 ├── cli/                    # `skill` CLI (publish, list, invoke)
+├── web/                    # Web UI (Vite + React)
 ├── examples/
 │   ├── hello-skill/        # minimal docker-runtime skill
 │   └── http-proxy-skill/   # external endpoint skill

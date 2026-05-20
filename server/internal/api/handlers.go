@@ -209,24 +209,110 @@ func (s *Server) listSkillLogs(c *gin.Context) {
 
 	out := make([]gin.H, 0, len(entries))
 	for _, e := range entries {
-		row := gin.H{
-			"status":       e.Status,
-			"latency_ms":   e.LatencyMS,
-			"input_bytes":  e.InputBytes,
-			"output_bytes": e.OutputBytes,
-			"started_at":   e.StartedAt.UTC().Format(time.RFC3339),
-			"version":      e.Version,
+		out = append(out, invocationRow(e, false))
+	}
+	c.JSON(http.StatusOK, gin.H{"invocations": out})
+}
+
+// invocationRow projects one Entry into the JSON object shape served
+// by the logs / invocations endpoints. Pulled out so the per-skill and
+// per-org endpoints emit byte-identical fields.
+func invocationRow(e invocations.Entry, includeSkill bool) gin.H {
+	row := gin.H{
+		"status":       e.Status,
+		"latency_ms":   e.LatencyMS,
+		"input_bytes":  e.InputBytes,
+		"output_bytes": e.OutputBytes,
+		"started_at":   e.StartedAt.UTC().Format(time.RFC3339),
+		"version":      e.Version,
+	}
+	if includeSkill {
+		row["namespace"] = e.Namespace
+		row["name"] = e.Name
+	}
+	if e.CallerIP != "" {
+		row["caller_ip"] = e.CallerIP
+	}
+	if e.UserAgent != "" {
+		row["user_agent"] = e.UserAgent
+	}
+	if e.ErrorMessage != "" {
+		row["error_message"] = e.ErrorMessage
+	}
+	return row
+}
+
+// getOrgOverview powers the Web UI dashboard. It returns aggregate
+// counts (skills total, invocations total / 24h) plus a small slice of
+// the most recent invocations so the landing page can render without a
+// second round-trip.
+func (s *Server) getOrgOverview(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	skills, err := s.registry.List(ctx, p.OrgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	byRuntime := map[string]int{}
+	for _, sk := range skills {
+		byRuntime[string(sk.Runtime.Type)]++
+	}
+
+	stats, err := s.invocations.StatsForOrg(ctx, p.OrgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	recent, err := s.invocations.RecentForOrg(ctx, p.OrgID, 10)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	rows := make([]gin.H, 0, len(recent))
+	for _, e := range recent {
+		rows = append(rows, invocationRow(e, true))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"skills_total":      len(skills),
+		"skills_by_runtime": byRuntime,
+		"invocations_total": stats.Total,
+		"invocations_24h":   stats.Last24h,
+		"recent":            rows,
+	})
+}
+
+// listOrgInvocations returns the most recent invocations across every
+// skill in the caller's org. Defaults to 100 rows; clients can request
+// up to 500 via ?limit=.
+func (s *Server) listOrgInvocations(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	limit := 100
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
 		}
-		if e.CallerIP != "" {
-			row["caller_ip"] = e.CallerIP
-		}
-		if e.UserAgent != "" {
-			row["user_agent"] = e.UserAgent
-		}
-		if e.ErrorMessage != "" {
-			row["error_message"] = e.ErrorMessage
-		}
-		out = append(out, row)
+	}
+
+	entries, err := s.invocations.RecentForOrg(c.Request.Context(), p.OrgID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]gin.H, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, invocationRow(e, true))
 	}
 	c.JSON(http.StatusOK, gin.H{"invocations": out})
 }
