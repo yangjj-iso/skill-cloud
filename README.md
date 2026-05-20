@@ -90,6 +90,18 @@ const client = new Client({ baseUrl: "http://localhost:8080", apiKey: "..." });
 console.log(await client.call("acme/hello", { name: "world" }));
 ```
 
+Or from the `skill` CLI:
+
+```bash
+skill login --host http://localhost:8080 --api-key ...
+skill init hello --namespace acme
+(cd hello && docker build -t acme/hello:0.1.0 . && skill push)
+skill call acme/hello --input '{"name":"world"}'
+skill logs acme/hello
+```
+
+See [`docs/cli-demo.md`](docs/cli-demo.md) for the full end-to-end walkthrough.
+
 ## Skill Manifest
 
 Every skill is described by a `skill.yaml`. See [`docs/manifest.md`](docs/manifest.md)
@@ -116,8 +128,11 @@ outputs:
 
 ## Status
 
-**Pre-alpha.** This is the initial scaffold — the server returns mock data and the
-sandbox is not yet wired to Docker. See `docs/roadmap.md` for the path to MVP.
+**Alpha.** Multi-tenant registry, audit logging, anti-theft (M0–M1.5),
+real Docker / HTTP-proxy runtime dispatch (M2), and the `skill` CLI
+with an end-to-end demo (M3) are landed. Streaming, async, Web UI,
+and Prometheus metrics are tracked in M4 — see
+[`docs/roadmap.md`](docs/roadmap.md).
 
 ## License
 

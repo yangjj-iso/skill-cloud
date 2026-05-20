@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,67 @@ func (s *Server) invokeSkill(c *gin.Context) {
 		code = http.StatusBadGateway
 	}
 	c.JSON(code, response)
+}
+
+// listSkillLogs returns the most recent invocations for a single
+// skill, scoped to the caller's org. Used by the CLI's `skill logs`
+// command. Always returns 200 with `{invocations: []}` (empty when the
+// skill has never been called); 404 when the skill does not exist in
+// the caller's org.
+func (s *Server) listSkillLogs(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+
+	_, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	entries, err := s.invocations.Recent(c.Request.Context(), p.OrgID, ns, name, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	out := make([]gin.H, 0, len(entries))
+	for _, e := range entries {
+		row := gin.H{
+			"status":       e.Status,
+			"latency_ms":   e.LatencyMS,
+			"input_bytes":  e.InputBytes,
+			"output_bytes": e.OutputBytes,
+			"started_at":   e.StartedAt.UTC().Format(time.RFC3339),
+			"version":      e.Version,
+		}
+		if e.CallerIP != "" {
+			row["caller_ip"] = e.CallerIP
+		}
+		if e.UserAgent != "" {
+			row["user_agent"] = e.UserAgent
+		}
+		if e.ErrorMessage != "" {
+			row["error_message"] = e.ErrorMessage
+		}
+		out = append(out, row)
+	}
+	c.JSON(http.StatusOK, gin.H{"invocations": out})
 }
 
 func (s *Server) getSkillStats(c *gin.Context) {

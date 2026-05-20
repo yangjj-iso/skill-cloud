@@ -38,6 +38,25 @@ func (m *Memory) Log(_ context.Context, e Entry) error {
 	return nil
 }
 
+// Recent returns at most `limit` entries for the given skill, newest
+// first. limit <= 0 is treated as 50.
+func (m *Memory) Recent(_ context.Context, orgID uuid.UUID, namespace, name string, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Entry, 0, limit)
+	// Walk newest-first.
+	for i := len(m.entries) - 1; i >= 0 && len(out) < limit; i-- {
+		e := m.entries[i]
+		if e.OrgID == orgID && e.Namespace == namespace && e.Name == name {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
 // Stats summarises invocations of (orgID, namespace, name).
 func (m *Memory) Stats(_ context.Context, orgID uuid.UUID, namespace, name string) (Stats, error) {
 	m.mu.Lock()

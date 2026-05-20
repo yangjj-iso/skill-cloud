@@ -63,9 +63,18 @@
 
 ### M3 — CLI + end-to-end
 
-- [ ] `skill` CLI (Cobra): `init`, `login`, `push`, `list`, `call`, `logs`, `stats`
-- [ ] Config: `~/.skillcloud/config.yaml` or `SKILLCLOUD_API_KEY` env
-- [ ] `examples/hello-skill` end-to-end: push → list → call → see log
+- [x] `skill` CLI (Cobra): `init`, `login`, `push`, `list`, `call`, `logs`, `stats`
+- [x] Config: `~/.skillcloud/config.yaml` + `SKILLCLOUD_HOST` / `SKILLCLOUD_API_KEY`
+      env overrides + `--host` / `--api-key` flag overrides
+- [x] Server-side `GET /v1/skills/:ns/:name/logs` (org-scoped, newest-first)
+      so the CLI can render real invocation history rather than just stats
+- [x] `skill init` scaffolds a runnable skill project (manifest, Dockerfile,
+      Python entrypoint, README) — see [`docs/cli-demo.md`](./cli-demo.md)
+      for the end-to-end walkthrough
+- [x] CI job for `cli/skill` (gofmt + vet + race-enabled unit tests)
+- [ ] *Follow-up:* `skill push` uploads source to MinIO so the operator
+      doesn't have to pre-build & push the image to a registry the
+      docker host can pull from (tracked alongside M2's MinIO follow-up)
 
 ### M4 — Hardening / P1
 
