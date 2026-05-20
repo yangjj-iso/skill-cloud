@@ -1,30 +1,91 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"log"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
+	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
+	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
 )
 
 func (s *Server) listSkills(c *gin.Context) {
-	skills := s.registry.List()
-	c.JSON(http.StatusOK, gin.H{"skills": skills})
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	skills, err := s.registry.List(c.Request.Context(), p.OrgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	redacted := make([]models.SkillManifest, len(skills))
+	for i, sk := range skills {
+		redacted[i] = sk.Redacted()
+	}
+	c.JSON(http.StatusOK, gin.H{"skills": redacted})
 }
 
 func (s *Server) getSkill(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
 	ns := c.Param("namespace")
 	name := c.Param("name")
-	skill, ok := s.registry.Get(ns, name)
-	if !ok {
+	skill, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
 	}
-	c.JSON(http.StatusOK, skill)
+	c.JSON(http.StatusOK, skill.Redacted())
+}
+
+// getSkillRuntime returns the runtime implementation details for an
+// owned skill. The registry is already org-scoped, so a successful Get
+// here proves the caller is in the owning org. This is the ONE endpoint
+// that exposes runtime.image / entrypoint / url — deliberately separate
+// so that anti-theft redaction on list/get can't be bypassed by accident.
+func (s *Server) getSkillRuntime(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+	skill, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+	c.JSON(http.StatusOK, skill.Runtime)
 }
 
 func (s *Server) createSkill(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
 	var manifest models.SkillManifest
 	if err := c.ShouldBindJSON(&manifest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -34,31 +95,273 @@ func (s *Server) createSkill(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	skill := s.registry.Upsert(manifest)
+	skill, err := s.registry.Upsert(c.Request.Context(), p.OrgID, manifest)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusCreated, skill)
 }
 
 func (s *Server) invokeSkill(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
 	ns := c.Param("namespace")
 	name := c.Param("name")
-	skill, ok := s.registry.Get(ns, name)
-	if !ok {
+	started := time.Now().UTC()
+
+	skill, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
 	}
 
+	rawBody, _ := io.ReadAll(c.Request.Body)
 	var input map[string]any
-	if err := c.ShouldBindJSON(&input); err != nil {
-		// Empty body is allowed.
+	if len(rawBody) > 0 {
+		if err := json.Unmarshal(rawBody, &input); err != nil {
+			input = map[string]any{}
+		}
+	} else {
 		input = map[string]any{}
 	}
 
-	// Real runtime dispatch is not yet implemented — return a stub
-	// response so the SDK / MCP integration can be developed in parallel.
-	c.JSON(http.StatusOK, gin.H{
+	result, _ := s.dispatcher.Run(c.Request.Context(), runtime.Request{Skill: skill, Input: input})
+
+	response := gin.H{
 		"skill":  skill.QualifiedName(),
-		"input":  input,
-		"output": gin.H{"message": "stub invocation — runtime dispatch not yet implemented"},
-		"status": "ok",
+		"status": result.Status,
+		"output": result.Output,
+	}
+	if result.ErrorMessage != "" {
+		response["error"] = result.ErrorMessage
+	}
+
+	s.recordInvocation(c, p, skill, started, result.Status, result.ErrorMessage, len(rawBody), result.OutputBytes)
+
+	// Status code reflects whether the skill executed successfully. We
+	// still write the body (including the error message) so callers can
+	// see what went wrong without scraping logs.
+	code := http.StatusOK
+	switch result.Status {
+	case runtime.StatusTimeout:
+		code = http.StatusGatewayTimeout
+	case runtime.StatusError:
+		code = http.StatusBadGateway
+	}
+	c.JSON(code, response)
+}
+
+// listSkillLogs returns the most recent invocations for a single
+// skill, scoped to the caller's org. Used by the CLI's `skill logs`
+// command. Always returns 200 with `{invocations: []}` (empty when the
+// skill has never been called); 404 when the skill does not exist in
+// the caller's org.
+func (s *Server) listSkillLogs(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+
+	_, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	entries, err := s.invocations.Recent(c.Request.Context(), p.OrgID, ns, name, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	out := make([]gin.H, 0, len(entries))
+	for _, e := range entries {
+		row := gin.H{
+			"status":       e.Status,
+			"latency_ms":   e.LatencyMS,
+			"input_bytes":  e.InputBytes,
+			"output_bytes": e.OutputBytes,
+			"started_at":   e.StartedAt.UTC().Format(time.RFC3339),
+			"version":      e.Version,
+		}
+		if e.CallerIP != "" {
+			row["caller_ip"] = e.CallerIP
+		}
+		if e.UserAgent != "" {
+			row["user_agent"] = e.UserAgent
+		}
+		if e.ErrorMessage != "" {
+			row["error_message"] = e.ErrorMessage
+		}
+		out = append(out, row)
+	}
+	c.JSON(http.StatusOK, gin.H{"invocations": out})
+}
+
+func (s *Server) getSkillStats(c *gin.Context) {
+	p, ok := auth.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "no principal"})
+		return
+	}
+	ns := c.Param("namespace")
+	name := c.Param("name")
+	_, found, err := s.registry.Get(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
+		return
+	}
+	stats, err := s.invocations.Stats(c.Request.Context(), p.OrgID, ns, name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+// recordInvocation writes an invocation row. Failures are logged but do
+// not fail the request — losing audit fidelity is preferable to failing
+// the user-facing call.
+//
+// The write deliberately uses a fresh context derived from
+// context.Background() so a client that disconnects after the skill
+// runs but before the response flushes can't cancel the audit insert.
+// The MCP handler does the same. We cap the write at 5 seconds so a
+// broken Postgres can't pin a goroutine forever.
+func (s *Server) recordInvocation(c *gin.Context, p auth.Principal, skill models.SkillManifest, started time.Time, status, errMsg string, inputBytes, outputBytes int) {
+	entry := invocations.Entry{
+		OrgID:        p.OrgID,
+		UserID:       p.UserID,
+		APIKeyID:     p.APIKeyID,
+		Namespace:    skill.Namespace,
+		Name:         skill.Name,
+		Version:      skill.Version,
+		Status:       status,
+		LatencyMS:    int(time.Since(started).Milliseconds()),
+		InputBytes:   inputBytes,
+		OutputBytes:  outputBytes,
+		ErrorMessage: errMsg,
+		CallerIP:     callerIPFromContext(c),
+		UserAgent:    c.Request.UserAgent(),
+		StartedAt:    started,
+	}
+	logCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.invocations.Log(logCtx, entry); err != nil {
+		log.Printf("invocations: log %s/%s: %v", skill.Namespace, skill.Name, err)
+	}
+}
+
+// --- bootstrap auth handlers ---
+
+type createOrgRequest struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+}
+
+func (s *Server) createOrg(c *gin.Context) {
+	var req createOrgRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Slug == "" || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "slug and name are required"})
+		return
+	}
+	id, err := s.auth.CreateOrg(c.Request.Context(), req.Slug, req.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id, "slug": req.Slug, "name": req.Name})
+}
+
+type createUserRequest struct {
+	OrgID string `json:"org_id"`
+	Email string `json:"email"`
+}
+
+func (s *Server) createUser(c *gin.Context) {
+	var req createUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	orgID, err := parseUUID(req.OrgID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid org_id: " + err.Error()})
+		return
+	}
+	if req.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email is required"})
+		return
+	}
+	id, err := s.auth.CreateUser(c.Request.Context(), orgID, req.Email)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id, "org_id": orgID, "email": req.Email})
+}
+
+type createAPIKeyRequest struct {
+	OrgID  string `json:"org_id"`
+	UserID string `json:"user_id"`
+	Name   string `json:"name"`
+}
+
+func (s *Server) createAPIKey(c *gin.Context) {
+	var req createAPIKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	orgID, err := parseUUID(req.OrgID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid org_id: " + err.Error()})
+		return
+	}
+	userID, err := parseUUID(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id: " + err.Error()})
+		return
+	}
+	issued, err := s.auth.IssueAPIKey(c.Request.Context(), orgID, userID, req.Name)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"id":     issued.ID,
+		"prefix": issued.Prefix,
+		// Plaintext is shown exactly once. Clients MUST store it now.
+		"token": issued.Plaintext,
 	})
 }
