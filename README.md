@@ -71,6 +71,12 @@ docker compose up -d
 # MinIO console: http://localhost:9001 (minioadmin / minioadmin)
 ```
 
+The server container bind-mounts `/var/run/docker.sock` so the runtime
+dispatcher can launch skill containers on the host's Docker daemon. This
+is convenient for local development but grants the server container
+root-equivalent access to the host — do not deploy the bundled
+`docker-compose.yml` untouched to a shared or production host.
+
 Create an org + API key, then call a skill from Python:
 
 ```python

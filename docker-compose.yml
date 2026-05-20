@@ -43,8 +43,18 @@ services:
       SKILLCLOUD_S3_SECRET_KEY: "minioadmin"
       SKILLCLOUD_S3_BUCKET: "skillcloud"
       SKILLCLOUD_LISTEN_ADDR: ":8080"
+      # The dispatcher shells out to this binary to spawn skill containers.
+      # The CLI talks to the host's docker daemon over the bind-mounted socket
+      # below so the spawned skill containers run as siblings of this server
+      # (not nested inside it). This pattern is convenient for local dev but
+      # NOTE: mounting the docker socket grants the server container root-
+      # equivalent control of the host; do not deploy this compose file
+      # untouched to a shared / production host.
+      SKILLCLOUD_DOCKER_BINARY: "docker"
     ports:
       - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy

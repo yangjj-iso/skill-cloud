@@ -36,6 +36,11 @@ API Server
         │     │  ← stdin: input JSON
         │     │  → stdout: output JSON (capped at 1 MiB)
         │     │  context.WithTimeout(manifest.timeout_seconds) → SIGKILL on deadline
+        │     │  When the server itself runs inside docker-compose, the
+        │     │  binary talks to the host's docker daemon over the
+        │     │  bind-mounted /var/run/docker.sock; skill containers
+        │     │  therefore spawn as **siblings** of the server, not nested
+        │     │  inside it.
         │     ▼
         └─ runtime.type == http_proxy  → HTTPProxy
               │  POST manifest.url, Content-Type: application/json
