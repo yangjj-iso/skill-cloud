@@ -57,6 +57,42 @@ func (m *Memory) Recent(_ context.Context, orgID uuid.UUID, namespace, name stri
 	return out, nil
 }
 
+// RecentForOrg returns the most recent invocations across every skill
+// in the given org, newest-first.
+func (m *Memory) RecentForOrg(_ context.Context, orgID uuid.UUID, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Entry, 0, limit)
+	for i := len(m.entries) - 1; i >= 0 && len(out) < limit; i-- {
+		e := m.entries[i]
+		if e.OrgID == orgID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// StatsForOrg counts invocations across all skills in the org.
+func (m *Memory) StatsForOrg(_ context.Context, orgID uuid.UUID) (OrgStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cutoff := time.Now().Add(-24 * time.Hour)
+	var s OrgStats
+	for _, e := range m.entries {
+		if e.OrgID != orgID {
+			continue
+		}
+		s.Total++
+		if e.StartedAt.After(cutoff) {
+			s.Last24h++
+		}
+	}
+	return s, nil
+}
+
 // Stats summarises invocations of (orgID, namespace, name).
 func (m *Memory) Stats(_ context.Context, orgID uuid.UUID, namespace, name string) (Stats, error) {
 	m.mu.Lock()

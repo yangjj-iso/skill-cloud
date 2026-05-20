@@ -19,6 +19,7 @@ import (
 
 	"github.com/yangjj-iso/skill-cloud/server/internal/auth"
 	"github.com/yangjj-iso/skill-cloud/server/internal/invocations"
+	"github.com/yangjj-iso/skill-cloud/server/internal/metrics"
 	"github.com/yangjj-iso/skill-cloud/server/internal/models"
 	"github.com/yangjj-iso/skill-cloud/server/internal/registry"
 	"github.com/yangjj-iso/skill-cloud/server/internal/runtime"
@@ -253,6 +254,14 @@ func splitQualifiedName(qualified string) (string, string, bool) {
 }
 
 func logInvocation(c *gin.Context, opts Options, p auth.Principal, skill models.SkillManifest, started time.Time, status, errMsg string, inputBytes, outputBytes int) {
+	latency := time.Since(started)
+	// Record the dispatcher result in Prometheus regardless of whether
+	// an audit store is configured — metrics and audit are separate
+	// concerns. Org label uses the UUID; the REST path resolves the
+	// slug via the auth service, but the MCP handler is not wired to
+	// auth.Service directly, so we keep the UUID here.
+	metrics.RecordInvocation(p.OrgID.String(), skill.Namespace, skill.Name, status, latency.Seconds())
+
 	if opts.Invocations == nil {
 		return
 	}
@@ -268,7 +277,7 @@ func logInvocation(c *gin.Context, opts Options, p auth.Principal, skill models.
 		Name:         skill.Name,
 		Version:      skill.Version,
 		Status:       status,
-		LatencyMS:    int(time.Since(started).Milliseconds()),
+		LatencyMS:    int(latency.Milliseconds()),
 		InputBytes:   inputBytes,
 		OutputBytes:  outputBytes,
 		ErrorMessage: errMsg,

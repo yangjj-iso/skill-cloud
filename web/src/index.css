@@ -1,0 +1,175 @@
+:root {
+  --sc-bg: #0f1115;
+  --sc-fg: #e7e9ec;
+  --sc-muted: #9aa3af;
+  --sc-accent: #6ee7b7;
+  --sc-card: #181c22;
+  --sc-border: #262b33;
+  --sc-danger: #f87171;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--sc-bg);
+  color: var(--sc-fg);
+}
+
+a {
+  color: var(--sc-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  border-right: 1px solid var(--sc-border);
+  padding: 24px 16px;
+}
+
+.sidebar h1 {
+  font-size: 18px;
+  margin: 0 0 24px 0;
+  letter-spacing: 0.02em;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar nav a {
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: var(--sc-fg);
+}
+
+.sidebar nav a.active {
+  background: var(--sc-card);
+  color: var(--sc-accent);
+}
+
+.content {
+  padding: 28px 32px;
+  overflow-x: auto;
+}
+
+.content h2 {
+  margin-top: 0;
+}
+
+.card {
+  background: var(--sc-card);
+  border: 1px solid var(--sc-border);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--sc-border);
+}
+
+th {
+  color: var(--sc-muted);
+  font-weight: 500;
+}
+
+.muted {
+  color: var(--sc-muted);
+}
+
+.status-ok {
+  color: var(--sc-accent);
+}
+
+.status-error, .status-timeout {
+  color: var(--sc-danger);
+}
+
+input, button, textarea, select {
+  font: inherit;
+  color: inherit;
+  background: var(--sc-card);
+  border: 1px solid var(--sc-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--sc-accent);
+}
+
+.error {
+  color: var(--sc-danger);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.kpi .card {
+  margin: 0;
+}
+
+.kpi .value {
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.kpi .label {
+  color: var(--sc-muted);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+code {
+  background: var(--sc-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+pre {
+  background: var(--sc-bg);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+  border: 1px solid var(--sc-border);
+}

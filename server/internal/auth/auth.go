@@ -119,6 +119,21 @@ func (s *Service) IssueAPIKey(ctx context.Context, orgID, userID uuid.UUID, name
 	return IssuedKey{ID: id, Prefix: prefix, Plaintext: prefix + "." + secret}, nil
 }
 
+// LookupOrgSlug returns the slug for the given orgID. Used by metrics
+// to label series with a human-friendly identifier instead of a UUID.
+// Returns (slug, nil) on success or ("", error) on failure.
+func (s *Service) LookupOrgSlug(ctx context.Context, orgID uuid.UUID) (string, error) {
+	var slug string
+	err := s.pool.QueryRow(ctx, `SELECT slug FROM orgs WHERE id = $1`, orgID).Scan(&slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("lookup org slug: %w", err)
+	}
+	return slug, nil
+}
+
 // Authenticate resolves a presented `<prefix>.<secret>` token to a Principal.
 func (s *Service) Authenticate(ctx context.Context, token string) (Principal, error) {
 	prefix, secret, ok := strings.Cut(token, ".")

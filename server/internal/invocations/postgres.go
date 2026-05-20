@@ -117,6 +117,61 @@ func (p *Postgres) Recent(ctx context.Context, orgID uuid.UUID, namespace, name 
 	return out, rows.Err()
 }
 
+// RecentForOrg returns the most recent invocations across every skill
+// in one org. Used by the cross-skill invocations view in the Web UI.
+func (p *Postgres) RecentForOrg(ctx context.Context, orgID uuid.UUID, limit int) ([]Entry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := p.pool.Query(ctx, `
+		SELECT i.status, i.latency_ms, i.input_bytes, i.output_bytes,
+		       i.started_at, COALESCE(host(i.caller_ip), ''), COALESCE(i.user_agent, ''),
+		       COALESCE(i.error_message, ''), s.namespace, s.name, i.version
+		FROM invocations i
+		JOIN skills s ON s.id = i.skill_id
+		WHERE i.org_id = $1
+		ORDER BY i.started_at DESC
+		LIMIT $2
+	`, orgID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("recent org invocations: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Entry, 0, limit)
+	for rows.Next() {
+		var e Entry
+		e.OrgID = orgID
+		if err := rows.Scan(
+			&e.Status, &e.LatencyMS, &e.InputBytes, &e.OutputBytes,
+			&e.StartedAt, &e.CallerIP, &e.UserAgent,
+			&e.ErrorMessage, &e.Namespace, &e.Name, &e.Version,
+		); err != nil {
+			return nil, fmt.Errorf("scan invocation: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// StatsForOrg counts invocations across every skill in the org.
+func (p *Postgres) StatsForOrg(ctx context.Context, orgID uuid.UUID) (OrgStats, error) {
+	var s OrgStats
+	err := p.pool.QueryRow(ctx, `
+		SELECT
+		    COALESCE(COUNT(*), 0),
+		    COALESCE(COUNT(*) FILTER (WHERE started_at >= now() - interval '24 hours'), 0)
+		FROM invocations
+		WHERE org_id = $1
+	`, orgID).Scan(&s.Total, &s.Last24h)
+	if err != nil {
+		return OrgStats{}, fmt.Errorf("stats for org: %w", err)
+	}
+	return s, nil
+}
+
 // Stats aggregates the invocations table for one skill.
 func (p *Postgres) Stats(ctx context.Context, orgID uuid.UUID, namespace, name string) (Stats, error) {
 	var (
